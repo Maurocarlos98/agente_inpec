@@ -6,3 +6,6 @@ __pycache__/
 *.docx
 Borrador_Respuesta_INPEC.txt
 procesados.json
+build/
+dist/
+*.spec
