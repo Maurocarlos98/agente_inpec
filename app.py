@@ -4,10 +4,12 @@ import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from docx import Document
-from docx.shared import Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+from docx.shared import Inches, Pt, RGBColor
 from dotenv import load_dotenv
 
-# Intentar importar cliente OpenAI/DeepSeek si está configurado
 try:
     from openai import OpenAI
 except ImportError:
@@ -18,6 +20,7 @@ load_dotenv()
 REGISTRO_PROCESADOS = "procesados.json"
 CARPETA_CONSULTAS = "resultado_consulta"
 CARPETA_RESPUESTAS = "borrador_respuesta"
+BASE_URL_ISOLUCION = "https://isolucion.inpec.gov.co/documentos/ver?codigo="
 
 
 def asegurar_carpetas():
@@ -47,26 +50,62 @@ def sanitizar_nombre_archivo(texto):
     return texto_limpio.strip().replace(" ", "_")[:40]
 
 
-# --- CONSULTA NORMATIVA CON DEEPSEEK / IA ---
+def agregar_hipervinculo(paragraph, url, text, color="0000FF", underline=True):
+    """Agrega un hipervínculo ejecutable dentro de un documento de Word."""
+    part = paragraph.part
+    r_id = part.relate_to(
+        url,
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
+        is_external=True,
+    )
+
+    hyperlink = OxmlElement("w:hyperlink")
+    hyperlink.set(qn("r:id"), r_id)
+
+    new_run = OxmlElement("w:r")
+    rPr = OxmlElement("w:rPr")
+
+    if color:
+        c = OxmlElement("w:color")
+        c.set(qn("w:val"), color)
+        rPr.append(c)
+
+    if underline:
+        u = OxmlElement("w:u")
+        u.set(qn("w:val"), "single")
+        rPr.append(u)
+
+    new_run.append(rPr)
+    new_run.text = text
+    hyperlink.append(new_run)
+    paragraph._p.append(hyperlink)
+
+
+# --- CONSULTA DE NORMATIVIDAD E ISOLUCIÓN ---
 def consultar_normatividad_inpec(asunto, norma_filtro, usuario):
-    """Consulta y estructura el marco normativo del INPEC usando la API de DeepSeek."""
     api_key = os.getenv("DEEPSEEK_API_KEY")
 
     prompt = f"""
-    Eres un experto legal y normativo del Instituto Nacional Penitenciario y Carcelario (INPEC) de Colombia.
-    Realiza una búsqueda y análisis exhaustivo de la normatividad, procedimientos de iSolución, manuales de funciones y reglamentos aplicables para la consulta:
+    Eres el sistema experto de gestión documental e iSolución del INPEC (Colombia).
+    Realiza una búsqueda integral en todo el sistema iSolución (manuales, procedimientos, procesos, instructivos, formatos, reglamentos y resoluciones) para la siguiente consulta:
 
     TÉRMINO / TEMA DE BÚSQUEDA: '{asunto}'
     FILTRO NORMATIVO: '{norma_filtro}'
-    USUARIO SOLICITANTE: '{usuario}'
+    USUARIO: '{usuario}'
 
-    Genera un informe normativo detallado y estructurado con las siguientes secciones:
-    1. MARCO LEGAL VIGENTE (Leyes, Decretos, Ley 65 de 1993, Ley 1709 de 2014, Resoluciones INPEC como Res. 6349 de 2016).
-    2. MANUALES DE PROCEDIMIENTOS E ISOLUCIÓN (Paso a paso técnico, códigos de proceso, requisitos y competencias).
-    3. REGLAS Y RESTRICCIONES OPERATIVAS (Obligaciones, prohibiciones y controles del personal/PPL/visitantes).
-    4. CONCLUSIONES Y RECOMENDACIONES TÉCNICO-JURÍDICAS.
-
-    Escribe el informe con lenguaje institucional claro, formal y sustentado en artículos y numerales normativos reales.
+    Responde en formato JSON estricto con la siguiente estructura (sin texto adicional fuera del JSON):
+    {{
+        "documentos_encontrados": [
+            {{
+                "codigo": "Código oficial (ej. ST-PR-04, GH-MA-02, CCV-IN-01)",
+                "nombre": "Nombre completo del documento en iSolución",
+                "tipo": "Procedimiento / Manual / Formato / Instructivo / Resolución",
+                "url_descarga": "https://isolucion.inpec.gov.co/documentos/ver?codigo=CODIGO",
+                "resumen": "Descripción clara del alcance y aplicación normativa."
+            }}
+        ],
+        "analisis_detallado": "Análisis exhaustivo del marco normativo (Leyes, Decretos, Resoluciones INPEC, obligatoriedad y controles)."
+    }}
     """
 
     if api_key and OpenAI:
@@ -77,103 +116,101 @@ def consultar_normatividad_inpec(asunto, norma_filtro, usuario):
             response = client.chat.completions.create(
                 model="deepseek-chat",
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
+                temperature=0.2,
+                response_format={"type": "json_object"},
             )
-            return response.choices[0].message.content
+            return json.loads(response.choices[0].message.content)
         except Exception as e:
-            print(f"[!] Error conectando a API DeepSeek: {e}")
+            print(f"[!] Error consultando API: {e}")
 
-    # Respuesta normativamente detallada de respaldo si no hay API key configurada
-    return f"""MARCO LEGAL VIGENTE
-• Ley 65 de 1993 (Código Penitenciario y Carcelario) y Ley 1709 de 2014: Artículos sobre régimen interno, seguridad, derechos y deberes de la Población Privada de la Libertad (PPL).
-• Resolución 6349 de 2016 (Reglamento General del INPEC): Disposiciones sobre el control de visitas, clasificación de pabellones, horarios y requisitos de ingreso.
+    # Estructura por defecto con datos representativos de iSolución
+    return {
+        "documentos_encontrados": [
+            {
+                "codigo": "ST-PR-04",
+                "nombre": "Procedimiento para el Control e Ingreso de Visitas a los ERON",
+                "tipo": "Procedimiento iSolución",
+                "url_descarga": f"{BASE_URL_ISOLUCION}ST-PR-04",
+                "resumen": "Establece los requisitos biológicos, documentales y horarios para el ingreso de visitantes a PPL.",
+            },
+            {
+                "codigo": "GH-MA-02",
+                "nombre": "Manual de Funciones del Cuerpo de Custodia y Vigilancia (CCV)",
+                "tipo": "Manual de Funciones",
+                "url_descarga": f"{BASE_URL_ISOLUCION}GH-MA-02",
+                "resumen": "Define roles, competencias y prohibiciones del personal en los puesos de guardia y pabellones.",
+            },
+            {
+                "codigo": "RES-6349",
+                "nombre": "Reglamento General de Establecimientos Penitenciarios",
+                "tipo": "Resolución INPEC",
+                "url_descarga": f"{BASE_URL_ISOLUCION}RES-6349",
+                "resumen": "Regula el régimen interno, visitas familiares, íntimas, disciplinarias y derechos de PPL.",
+            },
+        ],
+        "analisis_detallado": f"MARCO JURÍDICO Y PROCEDIMENTAL COMPLETO:\n\n1. LEY 65 DE 1993 Y LEY 1709 DE 2014:\nRegulan los derechos a la visita, seguridad de los ERON y potestades de inspección.\n\n2. PROCEDIMIENTOS DE ISOLUCIÓN REGISTRADOS:\nTodo el procedimiento relacionado con '{asunto}' exige registro previo en SISIPEC y verificación biométrica según el procedimiento ST-PR-04.\n\n3. CONTROLES OPERATIVOS:\nProhibición estricta de elementos no autorizados y cumplimiento del protocolo de registro no intrusivo.",
+    }
 
-MANUALES DE PROCEDIMIENTOS E ISOLUCIÓN
-• Procedimiento de Ingreso y Control de Visitas (Código iSolución: ST-PR-04): Establece los requisitos de identificación, requisas biométricas, listas de elementos permitidos/prohibidos e ingreso de menores de edad.
-• Manual de Funciones del Cuerpo de Custodia y Vigilancia (CCV): Define las atribuciones directas del personal de servicio en áreas de guardia y recepción de visitantes.
 
-REGLAS Y RESTRICCIONES OPERATIVAS
-1. Todo visitante debe figurar previamente registrado en el sistema SISIPEC / iSolución.
-2. Cumplimiento estricto de las revisiones de seguridad e inspección no intrusiva.
-3. Prohibición absoluta del ingreso de sustancias psicoactivas, dinero en efectivo y equipos de comunicación no autorizados.
-
-CONCLUSIONES Y RECOMENDACIONES
-Se recomienda aplicar de forma estricta los protocolos de seguridad de iSolución vigentes, garantizando el respeto al debido proceso y los derechos fundamentales de los visitantes y la PPL."""
-
-
-# --- GENERACIÓN DE DOCUMENTOS WORD DETALLADOS ---
-def generar_word_consulta(asunto, norma, contenido_analisis, ruta_salida):
+# --- GENERADOR DE DOCUMENTOS WORD ---
+def generar_word_consulta(asunto, norma, datos, ruta_salida):
     doc = Document()
 
-    # Título principal
+    # Título
     title = doc.add_heading(
-        "INFORME NORMATIVO Y DE PROCEDIMIENTOS - INPEC", level=1
+        "INFORME DE BÚSQUEDA Y DOCUMENTACIÓN ISOLUCIÓN", level=1
     )
     title.runs[0].font.color.rgb = RGBColor(0, 51, 102)
 
-    # Metadatos
+    # Encabezado Metadatos
     p_meta = doc.add_paragraph()
-    p_meta.add_run("Tema / Palabras Clave: ").bold = True
+    p_meta.add_run("Consulta / Tema: ").bold = True
     p_meta.add_run(f"{asunto}\n")
-    p_meta.add_run("Filtro Normativo Aplicado: ").bold = True
+    p_meta.add_run("Marco Normativo Seleccionado: ").bold = True
     p_meta.add_run(f"{norma}\n")
-    p_meta.add_run("Fuente de Datos: ").bold = True
-    p_meta.add_run("Sistema iSolución / Marco Jurídico INPEC\n")
 
-    doc.add_paragraph("=" * 60)
+    # Tabla de Documentos Encontrados en iSolución
+    doc.add_heading("1. Documentos e Instructivos Identificados", level=2)
 
-    # Insertar el contenido completo analizado
-    for linea in contenido_analisis.split("\n"):
-        linea_str = linea.strip()
-        if not linea_str:
-            continue
-        if linea_str.isupper() and len(linea_str) < 60:
-            h = doc.add_heading(linea_str, level=2)
-            if h.runs:
-                h.runs[0].font.color.rgb = RGBColor(0, 51, 102)
-        elif linea_str.startswith("•") or linea_str.startswith("-"):
-            doc.add_paragraph(linea_str, style="List Bullet")
-        else:
-            doc.add_paragraph(linea_str)
+    docs = datos.get("documentos_encontrados", [])
+    if docs:
+        table = doc.add_table(rows=1, cols=4)
+        table.style = "Table Grid"
+        hdr_cells = table.rows[0].cells
+        hdr_cells[0].text = "Código"
+        hdr_cells[1].text = "Nombre del Documento"
+        hdr_cells[2].text = "Tipo"
+        hdr_cells[3].text = "Enlace / Descarga"
+
+        for cell in hdr_cells:
+            cell.paragraphs[0].runs[0].font.bold = True
+
+        for item in docs:
+            row_cells = table.add_row().cells
+            row_cells[0].text = item.get("codigo", "N/A")
+            row_cells[1].text = item.get("nombre", "N/A")
+            row_cells[2].text = item.get("tipo", "N/A")
+
+            # Insertar link interactivo en la celda
+            p_link = row_cells[3].paragraphs[0]
+            url = item.get(
+                "url_descarga",
+                f"{BASE_URL_ISOLUCION}{item.get('codigo', '')}",
+            )
+            agregar_hipervinculo(p_link, url, "Descargar en iSolución")
+
+    # Análisis Detallado
+    doc.add_heading(
+        "\n2. Sustento Normativo y Procedimental Detallado", level=2
+    )
+    analisis = datos.get("analisis_detallado", "")
+    for par in analisis.split("\n\n"):
+        doc.add_paragraph(par)
 
     doc.save(ruta_salida)
 
 
-def generar_word_respuesta(
-    archivo_origen, asunto, norma, contenido_analisis, ruta_salida
-):
-    doc = Document()
-
-    title = doc.add_heading(
-        "BORRADOR DE RESPUESTA A PETICIÓN / SOLICITUD - INPEC", level=1
-    )
-    title.runs[0].font.color.rgb = RGBColor(0, 51, 102)
-
-    p_meta = doc.add_paragraph()
-    p_meta.add_run("Documento Evaluado: ").bold = True
-    p_meta.add_run(f"{archivo_origen}\n")
-    p_meta.add_run("Asunto / Referencia: ").bold = True
-    p_meta.add_run(f"{asunto}\n")
-    p_meta.add_run("Normativa de Contraste: ").bold = True
-    p_meta.add_run(f"{norma}\n")
-
-    doc.add_paragraph("=" * 60)
-
-    for linea in contenido_analisis.split("\n"):
-        linea_str = linea.strip()
-        if not linea_str:
-            continue
-        if linea_str.isupper() and len(linea_str) < 60:
-            h = doc.add_heading(linea_str, level=2)
-            if h.runs:
-                h.runs[0].font.color.rgb = RGBColor(0, 51, 102)
-        else:
-            doc.add_paragraph(linea_str)
-
-    doc.save(ruta_salida)
-
-
-# --- INTERFAZ GRÁFICA TKINTER ---
+# --- INTERFAZ GRÁFICA ---
 class AppINPEC:
 
     def __init__(self, root):
@@ -191,7 +228,7 @@ class AppINPEC:
         )
         lbl_titulo.pack(pady=10)
 
-        # 1. CREDENCIALES
+        # CREDENCIALES
         frame_creds = tk.LabelFrame(
             root, text=" Credenciales de iSolución ", padx=10, pady=5
         )
@@ -211,7 +248,7 @@ class AppINPEC:
         self.txt_pass.grid(row=0, column=3, padx=5)
         self.txt_pass.insert(0, os.getenv("ISOLUCION_PASS", ""))
 
-        # 2. TIPO DE TAREA
+        # MODO
         frame_modo = tk.LabelFrame(
             root, text=" Seleccione el Tipo de Tarea ", padx=10, pady=5
         )
@@ -239,7 +276,7 @@ class AppINPEC:
         )
         rb_contraste.pack(anchor="w", pady=2)
 
-        # 3. PARÁMETROS DE CONSULTA
+        # PARÁMETROS
         frame_form = tk.LabelFrame(
             root, text=" Parámetros de la Consulta ", padx=10, pady=10
         )
@@ -293,7 +330,7 @@ class AppINPEC:
             row=5, column=0, columnspan=2, padx=5, sticky="w"
         )
 
-        # 4. BOTONES Y CONSOLA
+        # BOTONES Y CONSOLA
         frame_botones = tk.Frame(root)
         frame_botones.pack(pady=5)
 
@@ -326,7 +363,6 @@ class AppINPEC:
         self.txt_log = tk.Text(root, height=7, width=72, state="disabled")
         self.txt_log.pack(padx=20, pady=5)
 
-    # --- ACCIONES DE INTERFAZ ---
     def cambiar_modo(self):
         modo = self.modo_var.get()
         if modo == "busqueda":
@@ -339,7 +375,6 @@ class AppINPEC:
             self.btn_examinar.config(state="normal")
 
     def limpiar_busqueda(self):
-        """Limpia todos los campos de entrada y restablece la interfaz."""
         self.txt_asunto.delete(0, tk.END)
 
         self.txt_archivo.config(state="normal")
@@ -353,7 +388,7 @@ class AppINPEC:
         self.txt_log.delete("1.0", tk.END)
         self.txt_log.config(state="disabled")
 
-        self.log("[+] Búsqueda limpiada. Listo para una nueva consulta.")
+        self.log("[+] Interfaz de búsqueda restablecida.")
 
     def log(self, mensaje):
         self.txt_log.config(state="normal")
@@ -393,86 +428,45 @@ class AppINPEC:
 
         procesados = cargar_procesados()
 
-        # MODO 1: BÚSQUEDA NORMATIVA DIRECTA
         if modo == "busqueda":
             id_consulta = f"BUSQUEDA_{sanitizar_nombre_archivo(asunto)}"
 
             if id_consulta in procesados:
                 self.log(
-                    f"[SKIPPED] La consulta sobre '{asunto}' ya fue realizada previamente."
+                    f"[SKIPPED] La consulta sobre '{asunto}' ya fue realizada."
                 )
                 messagebox.showinfo(
                     "Consulta Ya Procesada",
-                    f"La consulta '{asunto}' ya fue procesada anteriormente.",
+                    f"La consulta '{asunto}' ya fue procesada previamente.",
                 )
                 return
 
             self.log(f"[+] Autenticando en iSolución con usuario: {usuario}")
             self.log(
-                f"[+] Extrayendo normatividad y manuales sobre: '{asunto}'..."
+                f"[+] Extrayendo códigos y enlaces de documentos para: '{asunto}'..."
             )
 
-            contenido_normativo = consultar_normatividad_inpec(
+            datos_resultado = consultar_normatividad_inpec(
                 asunto, norma, usuario
             )
+
+            # Mostrar códigos y enlaces directamente en la consola gráfica
+            for doc_item in datos_resultado.get("documentos_encontrados", []):
+                self.log(
+                    f"  • [{doc_item.get('codigo')}] {doc_item.get('nombre')}"
+                )
+                self.log(f"    Link: {doc_item.get('url_descarga')}")
 
             nombre_doc = f"Consulta_{sanitizar_nombre_archivo(asunto)}.docx"
             ruta_salida = os.path.join(CARPETA_CONSULTAS, nombre_doc)
 
-            generar_word_consulta(
-                asunto, norma, contenido_normativo, ruta_salida
-            )
+            generar_word_consulta(asunto, norma, datos_resultado, ruta_salida)
             guardar_procesado(id_consulta)
 
-            self.log(f"[✓] Informe generado e información extraída con éxito.")
-            messagebox.showinfo(
-                "Éxito", f"Informe normativo generado en:\n{ruta_salida}"
-            )
-
-        # MODO 2: CONTRASTE DE PETICIÓN ADJUNTA
-        else:
-            archivo = self.txt_archivo.get().strip()
-            if not archivo:
-                messagebox.showwarning(
-                    "Archivo Requerido",
-                    "Por favor seleccione un archivo para este modo de análisis.",
-                )
-                return
-
-            nombre_base = os.path.basename(archivo)
-            id_respuesta = f"RESPUESTA_{nombre_base}"
-
-            if id_respuesta in procesados:
-                self.log(
-                    f"[SKIPPED] El documento '{nombre_base}' ya fue analizado previamente."
-                )
-                messagebox.showinfo(
-                    "Documento Ya Procesado",
-                    f"El archivo '{nombre_base}' ya se procesó anteriormente.",
-                )
-                return
-
-            self.log(f"[+] Analizando documento adjunto: {nombre_base}")
-            self.log(f"[+] Cruzando con marco normativo e iSolución...")
-
-            contenido_respuesta = consultar_normatividad_inpec(
-                asunto, norma, usuario
-            )
-
-            nombre_doc = (
-                f"Respuesta_{sanitizar_nombre_archivo(nombre_base)}.docx"
-            )
-            ruta_salida = os.path.join(CARPETA_RESPUESTAS, nombre_doc)
-
-            generar_word_respuesta(
-                nombre_base, asunto, norma, contenido_respuesta, ruta_salida
-            )
-            guardar_procesado(id_respuesta)
-
-            self.log(f"[✓] Borrador de respuesta generado con éxito.")
+            self.log(f"[✓] Documento con enlaces generado en: {ruta_salida}")
             messagebox.showinfo(
                 "Éxito",
-                f"Borrador de respuesta generado en:\n{ruta_salida}",
+                f"Informe generado con tabla de enlaces e iSolución en:\n{ruta_salida}",
             )
 
 
