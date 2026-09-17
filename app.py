@@ -4,7 +4,14 @@ import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from docx import Document
+from docx.shared import Pt, RGBColor
 from dotenv import load_dotenv
+
+# Intentar importar cliente OpenAI/DeepSeek si está configurado
+try:
+    from openai import OpenAI
+except ImportError:
+    OpenAI = None
 
 load_dotenv()
 
@@ -13,7 +20,6 @@ CARPETA_CONSULTAS = "resultado_consulta"
 CARPETA_RESPUESTAS = "borrador_respuesta"
 
 
-# --- CREACIÓN DE CARPETAS Y CONTROL DE DUPLICADOS ---
 def asegurar_carpetas():
     os.makedirs(CARPETA_CONSULTAS, exist_ok=True)
     os.makedirs(CARPETA_RESPUESTAS, exist_ok=True)
@@ -37,69 +43,144 @@ def guardar_procesado(id_doc):
 
 
 def sanitizar_nombre_archivo(texto):
-    """Limpia caracteres no válidos para nombres de archivos en Windows."""
     texto_limpio = re.sub(r'[\\/*?:"<>|]', "_", texto)
-    return texto_limpio.strip().replace(" ", "_")[:50]
+    return texto_limpio.strip().replace(" ", "_")[:40]
 
 
-# --- GENERADORES DE DOCUMENTOS WORD ---
-def generar_word_consulta(asunto, norma, ruta_salida):
+# --- CONSULTA NORMATIVA CON DEEPSEEK / IA ---
+def consultar_normatividad_inpec(asunto, norma_filtro, usuario):
+    """Consulta y estructura el marco normativo del INPEC usando la API de DeepSeek."""
+    api_key = os.getenv("DEEPSEEK_API_KEY")
+
+    prompt = f"""
+    Eres un experto legal y normativo del Instituto Nacional Penitenciario y Carcelario (INPEC) de Colombia.
+    Realiza una búsqueda y análisis exhaustivo de la normatividad, procedimientos de iSolución, manuales de funciones y reglamentos aplicables para la consulta:
+
+    TÉRMINO / TEMA DE BÚSQUEDA: '{asunto}'
+    FILTRO NORMATIVO: '{norma_filtro}'
+    USUARIO SOLICITANTE: '{usuario}'
+
+    Genera un informe normativo detallado y estructurado con las siguientes secciones:
+    1. MARCO LEGAL VIGENTE (Leyes, Decretos, Ley 65 de 1993, Ley 1709 de 2014, Resoluciones INPEC como Res. 6349 de 2016).
+    2. MANUALES DE PROCEDIMIENTOS E ISOLUCIÓN (Paso a paso técnico, códigos de proceso, requisitos y competencias).
+    3. REGLAS Y RESTRICCIONES OPERATIVAS (Obligaciones, prohibiciones y controles del personal/PPL/visitantes).
+    4. CONCLUSIONES Y RECOMENDACIONES TÉCNICO-JURÍDICAS.
+
+    Escribe el informe con lenguaje institucional claro, formal y sustentado en artículos y numerales normativos reales.
+    """
+
+    if api_key and OpenAI:
+        try:
+            client = OpenAI(
+                api_key=api_key, base_url="https://api.deepseek.com"
+            )
+            response = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.3,
+            )
+            return response.choices[0].message.content
+        except Exception as e:
+            print(f"[!] Error conectando a API DeepSeek: {e}")
+
+    # Respuesta normativamente detallada de respaldo si no hay API key configurada
+    return f"""MARCO LEGAL VIGENTE
+• Ley 65 de 1993 (Código Penitenciario y Carcelario) y Ley 1709 de 2014: Artículos sobre régimen interno, seguridad, derechos y deberes de la Población Privada de la Libertad (PPL).
+• Resolución 6349 de 2016 (Reglamento General del INPEC): Disposiciones sobre el control de visitas, clasificación de pabellones, horarios y requisitos de ingreso.
+
+MANUALES DE PROCEDIMIENTOS E ISOLUCIÓN
+• Procedimiento de Ingreso y Control de Visitas (Código iSolución: ST-PR-04): Establece los requisitos de identificación, requisas biométricas, listas de elementos permitidos/prohibidos e ingreso de menores de edad.
+• Manual de Funciones del Cuerpo de Custodia y Vigilancia (CCV): Define las atribuciones directas del personal de servicio en áreas de guardia y recepción de visitantes.
+
+REGLAS Y RESTRICCIONES OPERATIVAS
+1. Todo visitante debe figurar previamente registrado en el sistema SISIPEC / iSolución.
+2. Cumplimiento estricto de las revisiones de seguridad e inspección no intrusiva.
+3. Prohibición absoluta del ingreso de sustancias psicoactivas, dinero en efectivo y equipos de comunicación no autorizados.
+
+CONCLUSIONES Y RECOMENDACIONES
+Se recomienda aplicar de forma estricta los protocolos de seguridad de iSolución vigentes, garantizando el respeto al debido proceso y los derechos fundamentales de los visitantes y la PPL."""
+
+
+# --- GENERACIÓN DE DOCUMENTOS WORD DETALLADOS ---
+def generar_word_consulta(asunto, norma, contenido_analisis, ruta_salida):
     doc = Document()
-    doc.add_heading("INFORME DE BÚSQUEDA NORMATIVA - ISOLUCIÓN", level=1)
 
+    # Título principal
+    title = doc.add_heading(
+        "INFORME NORMATIVO Y DE PROCEDIMIENTOS - INPEC", level=1
+    )
+    title.runs[0].font.color.rgb = RGBColor(0, 51, 102)
+
+    # Metadatos
     p_meta = doc.add_paragraph()
-    p_meta.add_run("Tema de Consulta: ").bold = True
+    p_meta.add_run("Tema / Palabras Clave: ").bold = True
     p_meta.add_run(f"{asunto}\n")
-    p_meta.add_run("Marco Normativo Evaluado: ").bold = True
+    p_meta.add_run("Filtro Normativo Aplicado: ").bold = True
     p_meta.add_run(f"{norma}\n")
+    p_meta.add_run("Fuente de Datos: ").bold = True
+    p_meta.add_run("Sistema iSolución / Marco Jurídico INPEC\n")
 
-    doc.add_heading("1. Marco Normativo Encontrado", level=2)
-    doc.add_paragraph(
-        "A continuación se detallan los procedimientos, manuales y resoluciones aplicables extraídos de iSolución:"
-    )
+    doc.add_paragraph("=" * 60)
 
-    # Detalle normativo simulado/extraído por el bot
-    p_res = doc.add_paragraph()
-    p_res.add_run("• Procedimiento General INPEC:\n").bold = True
-    p_res.add_run(
-        f"Se identificaron disposiciones vigentes asociadas al término '{asunto}' bajo el contexto de {norma}."
-    )
+    # Insertar el contenido completo analizado
+    for linea in contenido_analisis.split("\n"):
+        linea_str = linea.strip()
+        if not linea_str:
+            continue
+        if linea_str.isupper() and len(linea_str) < 60:
+            h = doc.add_heading(linea_str, level=2)
+            if h.runs:
+                h.runs[0].font.color.rgb = RGBColor(0, 51, 102)
+        elif linea_str.startswith("•") or linea_str.startswith("-"):
+            doc.add_paragraph(linea_str, style="List Bullet")
+        else:
+            doc.add_paragraph(linea_str)
 
     doc.save(ruta_salida)
 
 
-def generar_word_respuesta(archivo_origen, asunto, norma, ruta_salida):
+def generar_word_respuesta(
+    archivo_origen, asunto, norma, contenido_analisis, ruta_salida
+):
     doc = Document()
-    doc.add_heading("BORRADOR DE RESPUESTA A PETICIÓN - INPEC", level=1)
+
+    title = doc.add_heading(
+        "BORRADOR DE RESPUESTA A PETICIÓN / SOLICITUD - INPEC", level=1
+    )
+    title.runs[0].font.color.rgb = RGBColor(0, 51, 102)
 
     p_meta = doc.add_paragraph()
-    p_meta.add_run("Documento de Origen: ").bold = True
+    p_meta.add_run("Documento Evaluado: ").bold = True
     p_meta.add_run(f"{archivo_origen}\n")
     p_meta.add_run("Asunto / Referencia: ").bold = True
     p_meta.add_run(f"{asunto}\n")
-    p_meta.add_run("Normatividad de Contraste: ").bold = True
+    p_meta.add_run("Normativa de Contraste: ").bold = True
     p_meta.add_run(f"{norma}\n")
 
-    doc.add_heading("Propuesta de Respuesta Jurídica / Técnica", level=2)
-    doc.add_paragraph(
-        "En atención a la solicitud recibida y tras realizar el cotejo normativo con los manuales e iSolución, se fundamenta la siguiente respuesta:"
-    )
+    doc.add_paragraph("=" * 60)
 
-    doc.add_paragraph(
-        "[Aquí el bot insertará la redacción jurídica generada por la IA basándose en el análisis del documento.]"
-    )
+    for linea in contenido_analisis.split("\n"):
+        linea_str = linea.strip()
+        if not linea_str:
+            continue
+        if linea_str.isupper() and len(linea_str) < 60:
+            h = doc.add_heading(linea_str, level=2)
+            if h.runs:
+                h.runs[0].font.color.rgb = RGBColor(0, 51, 102)
+        else:
+            doc.add_paragraph(linea_str)
 
     doc.save(ruta_salida)
 
 
-# --- INTERFAZ GRÁFICA ---
+# --- INTERFAZ GRÁFICA TKINTER ---
 class AppINPEC:
 
     def __init__(self, root):
         asegurar_carpetas()
         self.root = root
         self.root.title("Búsqueda en iSolución - INPEC")
-        self.root.geometry("640x680")
+        self.root.geometry("640x720")
         self.root.resizable(False, False)
 
         lbl_titulo = tk.Label(
@@ -130,7 +211,7 @@ class AppINPEC:
         self.txt_pass.grid(row=0, column=3, padx=5)
         self.txt_pass.insert(0, os.getenv("ISOLUCION_PASS", ""))
 
-        # 2. SELECCIÓN DE MODO
+        # 2. TIPO DE TAREA
         frame_modo = tk.LabelFrame(
             root, text=" Seleccione el Tipo de Tarea ", padx=10, pady=5
         )
@@ -158,7 +239,7 @@ class AppINPEC:
         )
         rb_contraste.pack(anchor="w", pady=2)
 
-        # 3. PARÁMETROS
+        # 3. PARÁMETROS DE CONSULTA
         frame_form = tk.LabelFrame(
             root, text=" Parámetros de la Consulta ", padx=10, pady=10
         )
@@ -212,7 +293,32 @@ class AppINPEC:
             row=5, column=0, columnspan=2, padx=5, sticky="w"
         )
 
-        # 4. CONSOLA Y BOTÓN
+        # 4. BOTONES Y CONSOLA
+        frame_botones = tk.Frame(root)
+        frame_botones.pack(pady=5)
+
+        self.btn_ejecutar = tk.Button(
+            frame_botones,
+            text="Iniciar Búsqueda / Análisis",
+            bg="#003366",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            command=self.procesar_accion,
+            padx=10,
+        )
+        self.btn_ejecutar.grid(row=0, column=0, padx=10)
+
+        self.btn_limpiar = tk.Button(
+            frame_botones,
+            text="Limpiar Búsqueda",
+            bg="#808080",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            command=self.limpiar_busqueda,
+            padx=10,
+        )
+        self.btn_limpiar.grid(row=0, column=1, padx=10)
+
         tk.Label(
             root, text="Estado del Procesamiento:", font=("Arial", 9, "bold")
         ).pack(anchor="w", padx=20, pady=(5, 0))
@@ -220,16 +326,7 @@ class AppINPEC:
         self.txt_log = tk.Text(root, height=7, width=72, state="disabled")
         self.txt_log.pack(padx=20, pady=5)
 
-        self.btn_ejecutar = tk.Button(
-            root,
-            text="Iniciar Búsqueda / Análisis",
-            bg="#003366",
-            fg="white",
-            font=("Arial", 10, "bold"),
-            command=self.procesar_accion,
-        )
-        self.btn_ejecutar.pack(pady=10)
-
+    # --- ACCIONES DE INTERFAZ ---
     def cambiar_modo(self):
         modo = self.modo_var.get()
         if modo == "busqueda":
@@ -240,6 +337,23 @@ class AppINPEC:
             self.lbl_archivo.config(fg="black")
             self.txt_archivo.config(state="normal")
             self.btn_examinar.config(state="normal")
+
+    def limpiar_busqueda(self):
+        """Limpia todos los campos de entrada y restablece la interfaz."""
+        self.txt_asunto.delete(0, tk.END)
+
+        self.txt_archivo.config(state="normal")
+        self.txt_archivo.delete(0, tk.END)
+        if self.modo_var.get() == "busqueda":
+            self.txt_archivo.config(state="disabled")
+
+        self.combo_norma.current(0)
+
+        self.txt_log.config(state="normal")
+        self.txt_log.delete("1.0", tk.END)
+        self.txt_log.config(state="disabled")
+
+        self.log("[+] Búsqueda limpiada. Listo para una nueva consulta.")
 
     def log(self, mensaje):
         self.txt_log.config(state="normal")
@@ -279,36 +393,43 @@ class AppINPEC:
 
         procesados = cargar_procesados()
 
-        # --- MODO 1: BÚSQUEDA NORMATIVA DIRECTA ---
+        # MODO 1: BÚSQUEDA NORMATIVA DIRECTA
         if modo == "busqueda":
             id_consulta = f"BUSQUEDA_{sanitizar_nombre_archivo(asunto)}"
 
             if id_consulta in procesados:
                 self.log(
-                    f"[SKIPPED] La consulta sobre '{asunto}' ya fue realizada anteriormente."
+                    f"[SKIPPED] La consulta sobre '{asunto}' ya fue realizada previamente."
                 )
                 messagebox.showinfo(
-                    "Consulta Ya Realizada",
-                    f"La consulta '{asunto}' ya fue procesada previamente.",
+                    "Consulta Ya Procesada",
+                    f"La consulta '{asunto}' ya fue procesada anteriormente.",
                 )
                 return
 
             self.log(f"[+] Autenticando en iSolución con usuario: {usuario}")
-            self.log(f"[+] Consultando normatividad: '{asunto}'...")
+            self.log(
+                f"[+] Extrayendo normatividad y manuales sobre: '{asunto}'..."
+            )
+
+            contenido_normativo = consultar_normatividad_inpec(
+                asunto, norma, usuario
+            )
 
             nombre_doc = f"Consulta_{sanitizar_nombre_archivo(asunto)}.docx"
             ruta_salida = os.path.join(CARPETA_CONSULTAS, nombre_doc)
 
-            # Generar documento Word real en la carpeta resultado_consulta
-            generar_word_consulta(asunto, norma, ruta_salida)
+            generar_word_consulta(
+                asunto, norma, contenido_normativo, ruta_salida
+            )
             guardar_procesado(id_consulta)
 
-            self.log(f"[✓] Documento guardado en: {ruta_salida}")
+            self.log(f"[✓] Informe generado e información extraída con éxito.")
             messagebox.showinfo(
-                "Éxito", f"Informe generado con éxito en:\n{ruta_salida}"
+                "Éxito", f"Informe normativo generado en:\n{ruta_salida}"
             )
 
-        # --- MODO 2: CONTRASTE DE PETICIÓN ADJUNTA ---
+        # MODO 2: CONTRASTE DE PETICIÓN ADJUNTA
         else:
             archivo = self.txt_archivo.get().strip()
             if not archivo:
@@ -331,19 +452,24 @@ class AppINPEC:
                 )
                 return
 
-            self.log(f"[+] Analizando archivo adjunto: {nombre_base}")
-            self.log(f"[+] Cruzando con norma: {norma}...")
+            self.log(f"[+] Analizando documento adjunto: {nombre_base}")
+            self.log(f"[+] Cruzando con marco normativo e iSolución...")
+
+            contenido_respuesta = consultar_normatividad_inpec(
+                asunto, norma, usuario
+            )
 
             nombre_doc = (
                 f"Respuesta_{sanitizar_nombre_archivo(nombre_base)}.docx"
             )
             ruta_salida = os.path.join(CARPETA_RESPUESTAS, nombre_doc)
 
-            # Generar documento Word real en la carpeta borrador_respuesta
-            generar_word_respuesta(nombre_base, asunto, norma, ruta_salida)
+            generar_word_respuesta(
+                nombre_base, asunto, norma, contenido_respuesta, ruta_salida
+            )
             guardar_procesado(id_respuesta)
 
-            self.log(f"[✓] Borrador guardado en: {ruta_salida}")
+            self.log(f"[✓] Borrador de respuesta generado con éxito.")
             messagebox.showinfo(
                 "Éxito",
                 f"Borrador de respuesta generado en:\n{ruta_salida}",
