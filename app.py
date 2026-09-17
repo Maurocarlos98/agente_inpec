@@ -1,13 +1,11 @@
 import json
 import os
 import re
+import webbrowser
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
-from docx.shared import Inches, Pt, RGBColor
+from docx.shared import Pt, RGBColor
 from dotenv import load_dotenv
 
 try:
@@ -20,7 +18,7 @@ load_dotenv()
 REGISTRO_PROCESADOS = "procesados.json"
 CARPETA_CONSULTAS = "resultado_consulta"
 CARPETA_RESPUESTAS = "borrador_respuesta"
-BASE_URL_ISOLUCION = "https://isolucion.inpec.gov.co/documentos/ver?codigo="
+PORTAL_ISOLUCION = "https://isolucion.inpec.gov.co/"
 
 
 def asegurar_carpetas():
@@ -50,61 +48,34 @@ def sanitizar_nombre_archivo(texto):
     return texto_limpio.strip().replace(" ", "_")[:40]
 
 
-def agregar_hipervinculo(paragraph, url, text, color="0000FF", underline=True):
-    """Agrega un hipervínculo ejecutable dentro de un documento de Word."""
-    part = paragraph.part
-    r_id = part.relate_to(
-        url,
-        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink",
-        is_external=True,
-    )
-
-    hyperlink = OxmlElement("w:hyperlink")
-    hyperlink.set(qn("r:id"), r_id)
-
-    new_run = OxmlElement("w:r")
-    rPr = OxmlElement("w:rPr")
-
-    if color:
-        c = OxmlElement("w:color")
-        c.set(qn("w:val"), color)
-        rPr.append(c)
-
-    if underline:
-        u = OxmlElement("w:u")
-        u.set(qn("w:val"), "single")
-        rPr.append(u)
-
-    new_run.append(rPr)
-    new_run.text = text
-    hyperlink.append(new_run)
-    paragraph._p.append(hyperlink)
+def abrir_portal_isolucion(codigo=None):
+    """Abre el navegador predeterminado directamente en la plataforma iSolución."""
+    webbrowser.open(PORTAL_ISOLUCION)
 
 
-# --- CONSULTA DE NORMATIVIDAD E ISOLUCIÓN ---
+# --- CONSULTA Y ESTRUCTURACIÓN ---
 def consultar_normatividad_inpec(asunto, norma_filtro, usuario):
     api_key = os.getenv("DEEPSEEK_API_KEY")
 
     prompt = f"""
     Eres el sistema experto de gestión documental e iSolución del INPEC (Colombia).
-    Realiza una búsqueda integral en todo el sistema iSolución (manuales, procedimientos, procesos, instructivos, formatos, reglamentos y resoluciones) para la siguiente consulta:
+    Realiza una búsqueda integral en el sistema iSolución sobre:
 
     TÉRMINO / TEMA DE BÚSQUEDA: '{asunto}'
     FILTRO NORMATIVO: '{norma_filtro}'
-    USUARIO: '{usuario}'
 
-    Responde en formato JSON estricto con la siguiente estructura (sin texto adicional fuera del JSON):
+    Responde exclusivamente en formato JSON estricto con la siguiente estructura:
     {{
         "documentos_encontrados": [
             {{
-                "codigo": "Código oficial (ej. ST-PR-04, GH-MA-02, CCV-IN-01)",
+                "codigo": "Código oficial (ej. ST-PR-04, GH-MA-02, RES-6349)",
                 "nombre": "Nombre completo del documento en iSolución",
-                "tipo": "Procedimiento / Manual / Formato / Instructivo / Resolución",
-                "url_descarga": "https://isolucion.inpec.gov.co/documentos/ver?codigo=CODIGO",
-                "resumen": "Descripción clara del alcance y aplicación normativa."
+                "tipo": "Procedimiento / Manual / Formato / Resolución",
+                "instruccion_ubicacion": "Pasos para ubicarlo en el mapa de procesos de iSolución",
+                "resumen": "Descripción del alcance y aplicación normativa."
             }}
         ],
-        "analisis_detallado": "Análisis exhaustivo del marco normativo (Leyes, Decretos, Resoluciones INPEC, obligatoriedad y controles)."
+        "analisis_detallado": "Análisis exhaustivo del marco normativo."
     }}
     """
 
@@ -123,54 +94,43 @@ def consultar_normatividad_inpec(asunto, norma_filtro, usuario):
         except Exception as e:
             print(f"[!] Error consultando API: {e}")
 
-    # Estructura por defecto con datos representativos de iSolución
     return {
         "documentos_encontrados": [
             {
                 "codigo": "ST-PR-04",
-                "nombre": "Procedimiento para el Control e Ingreso de Visitas a los ERON",
+                "nombre": "Procedimiento Control e Ingreso de Visitas a los ERON",
                 "tipo": "Procedimiento iSolución",
-                "url_descarga": f"{BASE_URL_ISOLUCION}ST-PR-04",
-                "resumen": "Establece los requisitos biológicos, documentales y horarios para el ingreso de visitantes a PPL.",
+                "instruccion_ubicacion": "Módulo Módulo de Documentos > Subproceso Mantenimiento del Orden y Seguridad",
+                "resumen": "Requisitos, controles e inspecciones para el ingreso de visitantes.",
             },
             {
                 "codigo": "GH-MA-02",
-                "nombre": "Manual de Funciones del Cuerpo de Custodia y Vigilancia (CCV)",
+                "nombre": "Manual de Funciones del CCV",
                 "tipo": "Manual de Funciones",
-                "url_descarga": f"{BASE_URL_ISOLUCION}GH-MA-02",
-                "resumen": "Define roles, competencias y prohibiciones del personal en los puesos de guardia y pabellones.",
-            },
-            {
-                "codigo": "RES-6349",
-                "nombre": "Reglamento General de Establecimientos Penitenciarios",
-                "tipo": "Resolución INPEC",
-                "url_descarga": f"{BASE_URL_ISOLUCION}RES-6349",
-                "resumen": "Regula el régimen interno, visitas familiares, íntimas, disciplinarias y derechos de PPL.",
+                "instruccion_ubicacion": "Módulo Módulo de Documentos > Gestión Humana",
+                "resumen": "Competencias y responsabilidades de la guardia penitenciaria.",
             },
         ],
-        "analisis_detallado": f"MARCO JURÍDICO Y PROCEDIMENTAL COMPLETO:\n\n1. LEY 65 DE 1993 Y LEY 1709 DE 2014:\nRegulan los derechos a la visita, seguridad de los ERON y potestades de inspección.\n\n2. PROCEDIMIENTOS DE ISOLUCIÓN REGISTRADOS:\nTodo el procedimiento relacionado con '{asunto}' exige registro previo en SISIPEC y verificación biométrica según el procedimiento ST-PR-04.\n\n3. CONTROLES OPERATIVOS:\nProhibición estricta de elementos no autorizados y cumplimiento del protocolo de registro no intrusivo.",
+        "analisis_detallado": f"MARCO JURÍDICO COMPLETO:\n\n1. LEY 65 DE 1993 Y LEY 1709 DE 2014:\nEstablecen los parámetros legales del régimen interno y control de accesos.\n\n2. REQUISITOS EN ISOLUCIÓN:\nUso obligatorio del código ST-PR-04 para la verificación de protocolos de ingreso y registro biométrico.",
     }
 
 
-# --- GENERADOR DE DOCUMENTOS WORD ---
+# --- GENERADOR DE INFORME WORD ---
 def generar_word_consulta(asunto, norma, datos, ruta_salida):
     doc = Document()
 
-    # Título
     title = doc.add_heading(
-        "INFORME DE BÚSQUEDA Y DOCUMENTACIÓN ISOLUCIÓN", level=1
+        "INFORME DE BÚSQUEDA Y CÓDIGOS ISOLUCIÓN - INPEC", level=1
     )
     title.runs[0].font.color.rgb = RGBColor(0, 51, 102)
 
-    # Encabezado Metadatos
     p_meta = doc.add_paragraph()
     p_meta.add_run("Consulta / Tema: ").bold = True
     p_meta.add_run(f"{asunto}\n")
-    p_meta.add_run("Marco Normativo Seleccionado: ").bold = True
+    p_meta.add_run("Filtro Aplicado: ").bold = True
     p_meta.add_run(f"{norma}\n")
 
-    # Tabla de Documentos Encontrados en iSolución
-    doc.add_heading("1. Documentos e Instructivos Identificados", level=2)
+    doc.add_heading("1. Documentos y Códigos Identificados en iSolución", level=2)
 
     docs = datos.get("documentos_encontrados", [])
     if docs:
@@ -180,7 +140,7 @@ def generar_word_consulta(asunto, norma, datos, ruta_salida):
         hdr_cells[0].text = "Código"
         hdr_cells[1].text = "Nombre del Documento"
         hdr_cells[2].text = "Tipo"
-        hdr_cells[3].text = "Enlace / Descarga"
+        hdr_cells[3].text = "Ruta en iSolución"
 
         for cell in hdr_cells:
             cell.paragraphs[0].runs[0].font.bold = True
@@ -190,16 +150,8 @@ def generar_word_consulta(asunto, norma, datos, ruta_salida):
             row_cells[0].text = item.get("codigo", "N/A")
             row_cells[1].text = item.get("nombre", "N/A")
             row_cells[2].text = item.get("tipo", "N/A")
+            row_cells[3].text = item.get("instruccion_ubicacion", "N/A")
 
-            # Insertar link interactivo en la celda
-            p_link = row_cells[3].paragraphs[0]
-            url = item.get(
-                "url_descarga",
-                f"{BASE_URL_ISOLUCION}{item.get('codigo', '')}",
-            )
-            agregar_hipervinculo(p_link, url, "Descargar en iSolución")
-
-    # Análisis Detallado
     doc.add_heading(
         "\n2. Sustento Normativo y Procedimental Detallado", level=2
     )
@@ -217,7 +169,7 @@ class AppINPEC:
         asegurar_carpetas()
         self.root = root
         self.root.title("Búsqueda en iSolución - INPEC")
-        self.root.geometry("640x720")
+        self.root.geometry("640x740")
         self.root.resizable(False, False)
 
         lbl_titulo = tk.Label(
@@ -343,7 +295,18 @@ class AppINPEC:
             command=self.procesar_accion,
             padx=10,
         )
-        self.btn_ejecutar.grid(row=0, column=0, padx=10)
+        self.btn_ejecutar.grid(row=0, column=0, padx=5)
+
+        self.btn_abrir_web = tk.Button(
+            frame_botones,
+            text="Abrir Portal iSolución",
+            bg="#006699",
+            fg="white",
+            font=("Arial", 10, "bold"),
+            command=abrir_portal_isolucion,
+            padx=10,
+        )
+        self.btn_abrir_web.grid(row=0, column=1, padx=5)
 
         self.btn_limpiar = tk.Button(
             frame_botones,
@@ -354,7 +317,7 @@ class AppINPEC:
             command=self.limpiar_busqueda,
             padx=10,
         )
-        self.btn_limpiar.grid(row=0, column=1, padx=10)
+        self.btn_limpiar.grid(row=0, column=2, padx=5)
 
         tk.Label(
             root, text="Estado del Procesamiento:", font=("Arial", 9, "bold")
@@ -437,25 +400,23 @@ class AppINPEC:
                 )
                 messagebox.showinfo(
                     "Consulta Ya Procesada",
-                    f"La consulta '{asunto}' ya fue procesada previamente.",
+                    f"La consulta '{asunto}' ya fue procesada anteriormente.",
                 )
                 return
 
             self.log(f"[+] Autenticando en iSolución con usuario: {usuario}")
             self.log(
-                f"[+] Extrayendo códigos y enlaces de documentos para: '{asunto}'..."
+                f"[+] Identificando códigos exactos en iSolución para: '{asunto}'..."
             )
 
             datos_resultado = consultar_normatividad_inpec(
                 asunto, norma, usuario
             )
 
-            # Mostrar códigos y enlaces directamente en la consola gráfica
             for doc_item in datos_resultado.get("documentos_encontrados", []):
                 self.log(
-                    f"  • [{doc_item.get('codigo')}] {doc_item.get('nombre')}"
+                    f"  • CÓDIGO: [{doc_item.get('codigo')}] -> {doc_item.get('nombre')}"
                 )
-                self.log(f"    Link: {doc_item.get('url_descarga')}")
 
             nombre_doc = f"Consulta_{sanitizar_nombre_archivo(asunto)}.docx"
             ruta_salida = os.path.join(CARPETA_CONSULTAS, nombre_doc)
@@ -463,10 +424,10 @@ class AppINPEC:
             generar_word_consulta(asunto, norma, datos_resultado, ruta_salida)
             guardar_procesado(id_consulta)
 
-            self.log(f"[✓] Documento con enlaces generado en: {ruta_salida}")
+            self.log(f"[✓] Documento con códigos generado en: {ruta_salida}")
             messagebox.showinfo(
                 "Éxito",
-                f"Informe generado con tabla de enlaces e iSolución en:\n{ruta_salida}",
+                f"Informe generado con la tabla de códigos para ingresar a iSolución:\n{ruta_salida}",
             )
 
 
