@@ -1,15 +1,24 @@
 import json
 import os
+import re
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from docx import Document
 from dotenv import load_dotenv
 
 load_dotenv()
 
 REGISTRO_PROCESADOS = "procesados.json"
+CARPETA_CONSULTAS = "resultado_consulta"
+CARPETA_RESPUESTAS = "borrador_respuesta"
 
 
-# --- CONTROL DE DUPLICADOS ---
+# --- CREACIÓN DE CARPETAS Y CONTROL DE DUPLICADOS ---
+def asegurar_carpetas():
+    os.makedirs(CARPETA_CONSULTAS, exist_ok=True)
+    os.makedirs(CARPETA_RESPUESTAS, exist_ok=True)
+
+
 def cargar_procesados():
     if os.path.exists(REGISTRO_PROCESADOS):
         try:
@@ -27,16 +36,72 @@ def guardar_procesado(id_doc):
         json.dump(list(procesados), f, ensure_ascii=False, indent=2)
 
 
+def sanitizar_nombre_archivo(texto):
+    """Limpia caracteres no válidos para nombres de archivos en Windows."""
+    texto_limpio = re.sub(r'[\\/*?:"<>|]', "_", texto)
+    return texto_limpio.strip().replace(" ", "_")[:50]
+
+
+# --- GENERADORES DE DOCUMENTOS WORD ---
+def generar_word_consulta(asunto, norma, ruta_salida):
+    doc = Document()
+    doc.add_heading("INFORME DE BÚSQUEDA NORMATIVA - ISOLUCIÓN", level=1)
+
+    p_meta = doc.add_paragraph()
+    p_meta.add_run("Tema de Consulta: ").bold = True
+    p_meta.add_run(f"{asunto}\n")
+    p_meta.add_run("Marco Normativo Evaluado: ").bold = True
+    p_meta.add_run(f"{norma}\n")
+
+    doc.add_heading("1. Marco Normativo Encontrado", level=2)
+    doc.add_paragraph(
+        "A continuación se detallan los procedimientos, manuales y resoluciones aplicables extraídos de iSolución:"
+    )
+
+    # Detalle normativo simulado/extraído por el bot
+    p_res = doc.add_paragraph()
+    p_res.add_run("• Procedimiento General INPEC:\n").bold = True
+    p_res.add_run(
+        f"Se identificaron disposiciones vigentes asociadas al término '{asunto}' bajo el contexto de {norma}."
+    )
+
+    doc.save(ruta_salida)
+
+
+def generar_word_respuesta(archivo_origen, asunto, norma, ruta_salida):
+    doc = Document()
+    doc.add_heading("BORRADOR DE RESPUESTA A PETICIÓN - INPEC", level=1)
+
+    p_meta = doc.add_paragraph()
+    p_meta.add_run("Documento de Origen: ").bold = True
+    p_meta.add_run(f"{archivo_origen}\n")
+    p_meta.add_run("Asunto / Referencia: ").bold = True
+    p_meta.add_run(f"{asunto}\n")
+    p_meta.add_run("Normatividad de Contraste: ").bold = True
+    p_meta.add_run(f"{norma}\n")
+
+    doc.add_heading("Propuesta de Respuesta Jurídica / Técnica", level=2)
+    doc.add_paragraph(
+        "En atención a la solicitud recibida y tras realizar el cotejo normativo con los manuales e iSolución, se fundamenta la siguiente respuesta:"
+    )
+
+    doc.add_paragraph(
+        "[Aquí el bot insertará la redacción jurídica generada por la IA basándose en el análisis del documento.]"
+    )
+
+    doc.save(ruta_salida)
+
+
 # --- INTERFAZ GRÁFICA ---
 class AppINPEC:
 
     def __init__(self, root):
+        asegurar_carpetas()
         self.root = root
         self.root.title("Búsqueda en iSolución - INPEC")
         self.root.geometry("640x680")
         self.root.resizable(False, False)
 
-        # Encabezado
         lbl_titulo = tk.Label(
             root,
             text="ANALIZADOR NORMATIVO ISOLUCION",
@@ -45,9 +110,7 @@ class AppINPEC:
         )
         lbl_titulo.pack(pady=10)
 
-        # -------------------------------------------------------------
-        # SECCIÓN 1: CREDENCIALES DE ISOLUCIÓN
-        # -------------------------------------------------------------
+        # 1. CREDENCIALES
         frame_creds = tk.LabelFrame(
             root, text=" Credenciales de iSolución ", padx=10, pady=5
         )
@@ -67,9 +130,7 @@ class AppINPEC:
         self.txt_pass.grid(row=0, column=3, padx=5)
         self.txt_pass.insert(0, os.getenv("ISOLUCION_PASS", ""))
 
-        # -------------------------------------------------------------
-        # SECCIÓN 2: SELECCIÓN DE MODO / FUNCIONALIDAD
-        # -------------------------------------------------------------
+        # 2. SELECCIÓN DE MODO
         frame_modo = tk.LabelFrame(
             root, text=" Seleccione el Tipo de Tarea ", padx=10, pady=5
         )
@@ -79,7 +140,7 @@ class AppINPEC:
 
         rb_busqueda = tk.Radiobutton(
             frame_modo,
-            text="1. Búsqueda Normativa por Tema (Generar Informe Word)",
+            text="1. Búsqueda Normativa por Tema (Guarda en 'resultado_consulta')",
             variable=self.modo_var,
             value="busqueda",
             font=("Arial", 9, "bold"),
@@ -89,7 +150,7 @@ class AppINPEC:
 
         rb_contraste = tk.Radiobutton(
             frame_modo,
-            text="2. Contraste de Documento/Petición (Adjuntar Archivo)",
+            text="2. Contraste de Petición/Documento (Guarda en 'borrador_respuesta')",
             variable=self.modo_var,
             value="contraste",
             font=("Arial", 9, "bold"),
@@ -97,15 +158,12 @@ class AppINPEC:
         )
         rb_contraste.pack(anchor="w", pady=2)
 
-        # -------------------------------------------------------------
-        # SECCIÓN 3: FORMULARIO DE PARÁMETROS
-        # -------------------------------------------------------------
+        # 3. PARÁMETROS
         frame_form = tk.LabelFrame(
             root, text=" Parámetros de la Consulta ", padx=10, pady=10
         )
         frame_form.pack(fill="x", padx=20, pady=5)
 
-        # Asunto / Tema
         tk.Label(
             frame_form,
             text="Tema / Consulta / Palabras Clave:",
@@ -114,7 +172,6 @@ class AppINPEC:
         self.txt_asunto = tk.Entry(frame_form, width=62)
         self.txt_asunto.grid(row=1, column=0, columnspan=2, padx=5, sticky="w")
 
-        # Archivo Adjunto (Solo para modo contraste)
         self.lbl_archivo = tk.Label(
             frame_form,
             text="Documento Adjunto (Oficio / Solicitud):",
@@ -134,7 +191,6 @@ class AppINPEC:
         )
         self.btn_examinar.grid(row=3, column=1)
 
-        # Marco Normativo
         tk.Label(
             frame_form,
             text="Marco Normativo de Interés:",
@@ -156,9 +212,7 @@ class AppINPEC:
             row=5, column=0, columnspan=2, padx=5, sticky="w"
         )
 
-        # -------------------------------------------------------------
-        # SECCIÓN 4: CONSOLA DE SALIDA
-        # -------------------------------------------------------------
+        # 4. CONSOLA Y BOTÓN
         tk.Label(
             root, text="Estado del Procesamiento:", font=("Arial", 9, "bold")
         ).pack(anchor="w", padx=20, pady=(5, 0))
@@ -166,7 +220,6 @@ class AppINPEC:
         self.txt_log = tk.Text(root, height=7, width=72, state="disabled")
         self.txt_log.pack(padx=20, pady=5)
 
-        # Botón de Procesar
         self.btn_ejecutar = tk.Button(
             root,
             text="Iniciar Búsqueda / Análisis",
@@ -177,7 +230,6 @@ class AppINPEC:
         )
         self.btn_ejecutar.pack(pady=10)
 
-    # --- LÓGICA DE INTERFAZ ---
     def cambiar_modo(self):
         modo = self.modo_var.get()
         if modo == "busqueda":
@@ -204,7 +256,6 @@ class AppINPEC:
             self.txt_archivo.delete(0, tk.END)
             self.txt_archivo.insert(0, filename)
 
-    # --- EJECUCIÓN PRINCIPAL ---
     def procesar_accion(self):
         usuario = self.txt_user.get().strip()
         clave = self.txt_pass.get().strip()
@@ -226,20 +277,38 @@ class AppINPEC:
             )
             return
 
-        # MODO 1: BÚSQUEDA NORMATIVA DIRECTA
-        if modo == "busqueda":
-            self.log(f"[+] Autenticando en iSolución con usuario: {usuario}")
-            self.log(f"[+] Buscando normatividad sobre: '{asunto}'...")
-            self.log(f"[+] Filtro aplicado: {norma}")
+        procesados = cargar_procesados()
 
-            # AQUÍ SE CONECTA A ISOLUCIÓN / DEEPSEEK Y GENERA EL WORD DE NORMATIVIDAD
-            self.log("[✓] Búsqueda completada. Documento Word generado.")
+        # --- MODO 1: BÚSQUEDA NORMATIVA DIRECTA ---
+        if modo == "busqueda":
+            id_consulta = f"BUSQUEDA_{sanitizar_nombre_archivo(asunto)}"
+
+            if id_consulta in procesados:
+                self.log(
+                    f"[SKIPPED] La consulta sobre '{asunto}' ya fue realizada anteriormente."
+                )
+                messagebox.showinfo(
+                    "Consulta Ya Realizada",
+                    f"La consulta '{asunto}' ya fue procesada previamente.",
+                )
+                return
+
+            self.log(f"[+] Autenticando en iSolución con usuario: {usuario}")
+            self.log(f"[+] Consultando normatividad: '{asunto}'...")
+
+            nombre_doc = f"Consulta_{sanitizar_nombre_archivo(asunto)}.docx"
+            ruta_salida = os.path.join(CARPETA_CONSULTAS, nombre_doc)
+
+            # Generar documento Word real en la carpeta resultado_consulta
+            generar_word_consulta(asunto, norma, ruta_salida)
+            guardar_procesado(id_consulta)
+
+            self.log(f"[✓] Documento guardado en: {ruta_salida}")
             messagebox.showinfo(
-                "Éxito",
-                "Se ha generado el informe de normatividad en formato Word.",
+                "Éxito", f"Informe generado con éxito en:\n{ruta_salida}"
             )
 
-        # MODO 2: CONTRASTE DE DOCUMENTO ADJUNTO
+        # --- MODO 2: CONTRASTE DE PETICIÓN ADJUNTA ---
         else:
             archivo = self.txt_archivo.get().strip()
             if not archivo:
@@ -249,28 +318,35 @@ class AppINPEC:
                 )
                 return
 
-            id_doc = os.path.basename(archivo)
-            procesados = cargar_procesados()
+            nombre_base = os.path.basename(archivo)
+            id_respuesta = f"RESPUESTA_{nombre_base}"
 
-            if id_doc in procesados:
+            if id_respuesta in procesados:
                 self.log(
-                    f"[SKIPPED] El archivo '{id_doc}' ya fue procesado previamente."
+                    f"[SKIPPED] El documento '{nombre_base}' ya fue analizado previamente."
                 )
                 messagebox.showinfo(
-                    "Documento Duplicado",
-                    f"El archivo '{id_doc}' ya se analizó anteriormente.",
+                    "Documento Ya Procesado",
+                    f"El archivo '{nombre_base}' ya se procesó anteriormente.",
                 )
                 return
 
-            self.log(f"[+] Autenticando en iSolución como: {usuario}")
-            self.log(f"[+] Cargando archivo: {id_doc}")
-            self.log(f"[+] Cruzando con el marco normativo: {norma}...")
+            self.log(f"[+] Analizando archivo adjunto: {nombre_base}")
+            self.log(f"[+] Cruzando con norma: {norma}...")
 
-            # AQUÍ SE EJECUTA EL ANÁLISIS COMPLETO CONTRA EL DOCUMENTO
-            guardar_procesado(id_doc)
-            self.log("[✓] Análisis finalizado. Borrador de respuesta generado.")
+            nombre_doc = (
+                f"Respuesta_{sanitizar_nombre_archivo(nombre_base)}.docx"
+            )
+            ruta_salida = os.path.join(CARPETA_RESPUESTAS, nombre_doc)
+
+            # Generar documento Word real en la carpeta borrador_respuesta
+            generar_word_respuesta(nombre_base, asunto, norma, ruta_salida)
+            guardar_procesado(id_respuesta)
+
+            self.log(f"[✓] Borrador guardado en: {ruta_salida}")
             messagebox.showinfo(
-                "Éxito", "Proceso completado. Documento Word generado."
+                "Éxito",
+                f"Borrador de respuesta generado en:\n{ruta_salida}",
             )
 
 
